@@ -1,5 +1,2 @@
-.env
-venv/
-__pycache__/
-node_modules/
-data.db*
+# Common compressed file
+*.zip

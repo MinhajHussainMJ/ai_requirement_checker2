@@ -7,12 +7,19 @@ let CFG = null;         // /api/config
 
 /* ---------------- utilities ---------------- */
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    method: opts.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-    credentials: 'same-origin'
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      credentials: 'same-origin'
+    });
+  } catch (e) {
+    const err = new Error('Cannot reach the server. Check that it is running, then try again.');
+    err.status = 0;
+    throw err;
+  }
   let data = {};
   try { data = await res.json(); } catch (e) {}
   if (!res.ok) { const err = new Error(data.error || 'Request failed'); err.data = data; err.status = res.status; throw err; }
@@ -116,35 +123,55 @@ function authPage(tab) {
       </div>
       <div id="authAlert"></div>
       ${isReg ? `
-      <div class="field"><label>Full Name</label><input id="rName" placeholder="e.g. Ali Raza" /></div>
-      <div class="field"><label>Email</label><input id="rEmail" type="email" placeholder="you@example.com" /></div>
-      <div class="field"><label>Username</label><input id="rUser" placeholder="min 3 characters" /></div>
-      <div class="field"><label>Password</label><input id="rPass" type="password" placeholder="min 8 characters" /><div class="hint">Stored encrypted — never in plain text.</div></div>
-      <button class="btn" style="width:100%" id="rBtn">Create account &amp; start free trial</button>` : `
-      <div class="field"><label>Email or Username</label><input id="lLogin" /></div>
-      <div class="field"><label>Password</label><input id="lPass" type="password" /></div>
-      <button class="btn" style="width:100%" id="lBtn">Sign in</button>`}
+      <form id="regForm" autocomplete="on" novalidate>
+      <div class="field"><label>Full Name</label><input id="rName" placeholder="e.g. Ali Raza" autocomplete="name" required /></div>
+      <div class="field"><label>Email</label><input id="rEmail" type="email" placeholder="you@example.com" autocomplete="email" required /></div>
+      <div class="field"><label>Username</label><input id="rUser" placeholder="min 3 characters" autocomplete="username" required /></div>
+      <div class="field"><label>Password</label><input id="rPass" type="password" placeholder="min 8 characters" autocomplete="new-password" required /><div class="hint">Stored encrypted — never in plain text.</div></div>
+      <button class="btn" type="submit" style="width:100%" id="rBtn">Create account &amp; start free trial</button>
+      </form>` : `
+      <form id="loginForm" autocomplete="on" novalidate>
+      <div class="field"><label>Email or Username</label><input id="lLogin" autocomplete="username" required /></div>
+      <div class="field"><label>Password</label><input id="lPass" type="password" autocomplete="current-password" required /></div>
+      <button class="btn" type="submit" style="width:100%" id="lBtn">Sign in</button>
+      </form>`}
     </div>
   </div></main>`);
   document.getElementById('tLogin').onclick = () => location = '/login';
   document.getElementById('tReg').onclick = () => location = '/register';
   const showErr = m => document.getElementById('authAlert').innerHTML = alertBox('error', esc(m));
   if (isReg) {
-    document.getElementById('rBtn').onclick = async () => {
+    const btn = document.getElementById('rBtn');
+    document.getElementById('regForm').onsubmit = async ev => {
+      ev.preventDefault();
+      if (btn.disabled) return;
+      btn.disabled = true; btn.textContent = 'Creating account…';
       try {
         await api('/api/register', { method: 'POST', body: {
-          name: rName.value, email: rEmail.value, username: rUser.value, password: rPass.value } });
+          name: rName.value.trim(), email: rEmail.value.trim(), username: rUser.value.trim(), password: rPass.value } });
         location = '/profile';
-      } catch (e) { showErr(e.message); }
+      } catch (e) {
+        showErr(e.status === 409 ? e.message
+              : (e.message || 'Signup failed. Please check your details and try again.'));
+        btn.disabled = false; btn.innerHTML = 'Create account &amp; start free trial';
+      }
     };
   } else {
+    const btn = document.getElementById('lBtn');
     const go = async () => {
+      if (btn.disabled) return;
+      btn.disabled = true; btn.textContent = 'Signing in…';
       try {
-        const r = await api('/api/login', { method: 'POST', body: { login: lLogin.value, password: lPass.value } });
+        const r = await api('/api/login', { method: 'POST', body: { login: lLogin.value.trim(), password: lPass.value } });
         location = r.user.role === 'admin' ? '/admin' : '/dashboard';
-      } catch (e) { showErr(e.message); }
+      } catch (e) {
+        let msg = e.message || 'Login failed. Please try again.';
+        if (e.status === 401) msg = 'Invalid email/username or password.';
+        showErr(msg);
+        btn.disabled = false; btn.textContent = 'Sign in';
+      }
     };
-    document.getElementById('lBtn').onclick = go;
+    document.getElementById('loginForm').onsubmit = ev => { ev.preventDefault(); go(); };
     lPass.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
   }
 }
@@ -595,6 +622,19 @@ async function route() {
 }
 
 (async function boot() {
-  try { CFG = await api('/api/config'); } catch (e) { CFG = { setupNeeded: false }; }
+  try {
+    CFG = await api('/api/config');
+  } catch (e) {
+    // If the server is unreachable, show a clear message instead of a blank page.
+    if (!CFG) {
+      setHTML(`<main class="main"><div class="auth-wrap"><div class="card">
+        <h2>⚠️ Cannot reach the server</h2>
+        <p class="subtitle">The app could not load its configuration. Make sure the server is running
+        (<code>npm start</code>) and reload this page.</p>
+        <button class="btn" style="width:100%" onclick="location.reload()">Reload</button>
+      </div></div></main>`);
+      return;
+    }
+  }
   await route();
 })();

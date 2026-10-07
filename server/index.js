@@ -19,7 +19,27 @@ app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 /* ---------------- helpers ---------------- */
-function hash(pw) { return bcrypt.hashSync(pw, 10); }
+function hash(pw) { return bcrypt.hashSync(String(pw), 10); }
+
+// Robust password verification: never throws on malformed/legacy hashes.
+// Handles $2a$/$2b$ and rewrites legacy $2y$/$2x$ prefixes (produced by other
+// bcrypt implementations) to $2b$, which bcryptjs verifies identically.
+function verifyPw(input, stored) {
+  if (typeof input !== 'string' || typeof stored !== 'string' || !stored) return false;
+  let h = stored.trim();
+  if (/^\$2[xy]\$/.test(h)) h = '$2b$' + h.slice(4);
+  try { return bcrypt.compareSync(input, h); } catch (e) { return false; }
+}
+
+// One-time repair of legacy $2y$/$2x$ password hashes in the DB (older bcrypt
+// implementations). Rewrites them to $2b$ so every login verifies correctly.
+try {
+  const rows = db.prepare("SELECT id, password_hash FROM users WHERE password_hash LIKE '$2y$%' OR password_hash LIKE '$2x$%'").all();
+  for (const r of rows) {
+    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run('$2b$' + r.password_hash.slice(4), r.id);
+  }
+  if (rows.length) console.log(`Repaired ${rows.length} legacy password hash(es).`);
+} catch (e) { /* non-fatal */ }
 
 function sign(user) {
   return jwt.sign({ id: user.id, role: user.role }, SECRET, { expiresIn: JWT_EXPIRES });
@@ -128,6 +148,21 @@ app.post('/api/setup/admin', (req, res) => {
 });
 
 /* ---------------- auth ---------------- */
+// Clear any stale session cookie before unauthenticated auth endpoints, so a
+// leftover/expired cookie can never interfere with login or signup.
+function clearSessionCookie(res) { res.clearCookie('token'); }
+
+// Normalize common JSON body shapes: if the client sent {form:{...}} (or a
+// bare form object), merge it up one level so handlers can read fields either
+// way. This makes login/signup resilient to body-format mismatches.
+app.use((req, res, next) => {
+  const b = req.body;
+  if (b && typeof b === 'object' && !Array.isArray(b) && b.form && typeof b.form === 'object' && !Array.isArray(b.form)) {
+    req.body = { ...b.form, ...Object.fromEntries(Object.entries(b).filter(([k]) => k !== 'form')) };
+  }
+  next();
+});
+
 app.get('/api/config', (req, res) => {
   res.json({
     setupNeeded: !adminExists(),
@@ -139,26 +174,43 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/register', (req, res) => {
+  clearSessionCookie(res);
   const { name, email, username, password } = req.body || {};
   if (!name || String(name).trim().length < 2) return res.status(400).json({ error: 'Enter your full name' });
   if (!validEmail(email)) return res.status(400).json({ error: 'Enter a valid email' });
   if (!username || String(username).trim().length < 3) return res.status(400).json({ error: 'Username must be at least 3 characters' });
   if (!validPw(password)) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  const dup = db.prepare('SELECT id FROM users WHERE email=? OR username=?').get(email.trim().toLowerCase(), String(username).trim().toLowerCase());
+  const em = String(email).trim().toLowerCase();
+  const un = String(username).trim().toLowerCase();
+  const dup = db.prepare('SELECT id FROM users WHERE email=? OR username=?').get(em, un);
   if (dup) return res.status(409).json({ error: 'Email or username already in use' });
   const trialStart = new Date().toISOString();
-  const info = db.prepare('INSERT INTO users(email,username,password_hash,role,status,full_name,trial_start) VALUES(?,?,?,?,?,?,?)')
-    .run(email.trim().toLowerCase(), String(username).trim().toLowerCase(), hash(password), 'customer', 'trial', String(name).trim(), trialStart);
+  let info;
+  try {
+    info = db.prepare('INSERT INTO users(email,username,password_hash,role,status,full_name,trial_start) VALUES(?,?,?,?,?,?,?)')
+      .run(em, un, hash(password), 'customer', 'trial', String(name).trim(), trialStart);
+  } catch (e) {
+    // UNIQUE constraint race (same email/username created concurrently)
+    if (String(e && e.message).includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Email or username already in use' });
+    }
+    console.error('register error:', e);
+    return res.status(500).json({ error: 'Could not create account. Please try again.' });
+  }
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid);
   setCookie(res, sign(u));
   res.json({ ok: true, user: publicUser(u), message: `Account created. ${TRIAL_DAYS}-day free trial started.` });
 });
 
 app.post('/api/login', (req, res) => {
+  clearSessionCookie(res);
   const { login, password } = req.body || {};
-  const u = db.prepare('SELECT * FROM users WHERE email=? OR username=?').get(
-    String(login || '').trim().toLowerCase(), String(login || '').trim().toLowerCase());
-  if (!u || !bcrypt.compareSync(password || '', u.password_hash)) {
+  const key = String(login || '').trim().toLowerCase();
+  if (!key || typeof password !== 'string' || !password) {
+    return res.status(400).json({ error: 'Enter your email/username and password' });
+  }
+  const u = db.prepare('SELECT * FROM users WHERE email=? OR username=?').get(key, key);
+  if (!u || !verifyPw(password, u.password_hash)) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
   refreshStatus(u);

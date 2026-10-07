@@ -1,2 +1,3 @@
-# Common compressed file
-*.zip
+# SQLite
+*.db-shm
+*.db-wal

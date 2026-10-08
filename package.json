@@ -1,0 +1,17 @@
+{
+  "name": "ai-university-scholarship-advisor",
+  "version": "1.0.0",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "license": "ISC",
+  "description": "AI University & Scholarship Advisor - simple subscription web app (Express + SQLite)",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.11.1",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3"
+  }
+}

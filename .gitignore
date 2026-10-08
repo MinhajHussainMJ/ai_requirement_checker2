@@ -1,2 +1,6 @@
 # Common compressed file
 *.zip
+node_modules/
+.env
+*.db-shm
+*.db-wal

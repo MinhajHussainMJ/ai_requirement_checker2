@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const { db, getSetting, setSetting } = require('./db');
 const { analyze } = require('./recommend');
+const { publicCatalog } = require('./catalog');
 const { initTrialGuard, deviceMiddleware, checkTrialEligibility, recordTrial } = require('./trial-guard');
 
 const app = express();
@@ -138,7 +139,8 @@ app.get('/api/config', (req, res) => {
     easypaisa_name: getSetting('easypaisa_name'),
     easypaisa_number: getSetting('easypaisa_number'),
     monthly_price: getSetting('monthly_price'),
-    trial_days: TRIAL_DAYS
+    trial_days: TRIAL_DAYS,
+    ...publicCatalog()
   });
 });
 app.post('/api/register', (req, res) => {

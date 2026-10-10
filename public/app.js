@@ -36,11 +36,18 @@ function daysLeft(user) {
   }
   return 0;
 }
-const COUNTRIES = [['UK','United Kingdom'],['USA','United States'],['CA','Canada'],['AU','Australia'],['DE','Germany'],
+const COUNTRIES_FALLBACK = [['UK','United Kingdom'],['USA','United States'],['CA','Canada'],['AU','Australia'],['DE','Germany'],
   ['NL','Netherlands'],['TR','Turkey'],['MY','Malaysia'],['CN','China'],['HU','Hungary'],['IT','Italy'],['PK','Pakistan']];
-const PROGRAMS = ['MSc Computer Science','MSc Data Science','MSc Artificial Intelligence','MBA','MSc Management','MSc Finance',
+const PROGRAMS_FALLBACK = ['MSc Computer Science','MSc Data Science','MSc Artificial Intelligence','MBA','MSc Management','MSc Finance',
   'MSc Public Health','MSc Nursing','MSc Mechanical Engineering','MSc Electrical Engineering','MSc Cybersecurity',
   'MSc Information Technology','MSc Education','MSc Psychology'];
+function countryOptions() {
+  return (CFG && CFG.countries && CFG.countries.length) ? CFG.countries : COUNTRIES_FALLBACK;
+}
+function programGroups() {
+  if (CFG && CFG.program_groups && CFG.program_groups.length) return CFG.program_groups;
+  return [{ label: 'Master’s', items: PROGRAMS_FALLBACK }];
+}
 
 /* ---------------- shell ---------------- */
 function shell(content, activeNav) {
@@ -210,6 +217,43 @@ function dashboard() {
     </div></div>`, 'dashboard'));
 }
 
+function groupedSelect(id, label, groups, val, hint) {
+  const opts = [`<option value="">No preference</option>`].concat(groups.map(g =>
+    `<optgroup label="${esc(g.label)}">${g.items.map(item => {
+      const value = Array.isArray(item) ? item[0] : item;
+      const text = Array.isArray(item) ? item[1] : item;
+      return `<option value="${esc(value)}" ${String(val) === String(value) ? 'selected' : ''}>${esc(text)}</option>`;
+    }).join('')}</optgroup>`));
+  return `<div class="field">
+    <label>${label}</label>
+    <input class="select-filter" id="${id}Filter" placeholder="Type to search…" autocomplete="off" />
+    <select id="${id}" class="select-long">${opts.join('')}</select>
+    ${hint ? `<div class="hint">${hint}</div>` : ''}
+  </div>`;
+}
+function wireSelectFilter(filterId, selectId) {
+  const input = document.getElementById(filterId);
+  const sel = document.getElementById(selectId);
+  if (!input || !sel) return;
+  const original = sel.innerHTML;
+  let liveVal = sel.value;
+  sel.addEventListener('change', () => { liveVal = sel.value; });
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    const keep = liveVal;
+    sel.innerHTML = original;
+    if (q) {
+      [...sel.querySelectorAll('optgroup')].forEach(g => {
+        [...g.querySelectorAll('option')].forEach(o => {
+          const hit = o.textContent.toLowerCase().includes(q) || String(o.value).toLowerCase().includes(q);
+          if (!hit && o.value !== keep) o.remove();
+        });
+        if (!g.querySelector('option')) g.remove();
+      });
+    }
+    sel.value = keep;
+  });
+}
 function profilePage() {
   const p = ME.profile || {};
   const f = (id, label, val, ph) => `<div class="field"><label>${label}</label><input id="${id}" value="${esc(val || '')}" placeholder="${ph || ''}" /></div>`;
@@ -229,8 +273,10 @@ function profilePage() {
         ${sel('english_test', 'English test', [['None','Not taken yet'],['IELTS','IELTS'],['PTE','PTE'],['TOEFL','TOEFL']], p.english_test || 'None')}
         ${f('english_score', 'English score (band)', p.english_score, 'e.g. 6.5')}
         ${f('work_exp', 'Work experience (years)', p.work_exp, 'e.g. 2')}
-        ${sel('country', 'Preferred country', [['','No preference'],...COUNTRIES], p.country)}
-        ${sel('program', 'Preferred degree / program', [['','No preference'],...PROGRAMS.map(x=>[x,x])], p.program)}
+        ${groupedSelect('country', 'Preferred country', [{ label: 'All countries', items: countryOptions() }], p.country,
+          'Every country with a higher-education system is listed. Type to search (e.g. Japan, Germany, Nigeria).')}
+        ${groupedSelect('program', 'Preferred degree / program', programGroups(), p.program,
+          'Includes BS / BA bachelor’s programs across sciences, engineering, health, arts and social sciences, plus Master’s and PhD options.')}
         ${f('budget', 'Approximate budget (USD / year)', p.budget, 'e.g. 15000')}
       </div>
       <div class="field"><label>Other relevant information</label><textarea id="extra" placeholder="Publications, awards, dependents, health, visa history, preferences…">${esc(p.extra || '')}</textarea></div>
@@ -239,6 +285,8 @@ function profilePage() {
         <a class="btn secondary" href="/recommendations">Run AI analysis →</a>
       </div>
     </div>`, 'profile'));
+  wireSelectFilter('countryFilter', 'country');
+  wireSelectFilter('programFilter', 'program');
   document.getElementById('savePf').onclick = async () => {
     const body = {};
     ['name','highest_degree','field','cgpa','grad_year','english_test','english_score','work_exp','country','program','budget','extra']
@@ -538,7 +586,7 @@ window.viewUser = async (uid) => {
         <div>${pf ? `<table>
           ${kv('Name', pf.name)}${kv('Highest degree', pf.highest_degree)}${kv('Field', pf.field)}${kv('CGPA/%', pf.cgpa)}
           ${kv('Graduation year', pf.grad_year)}${kv('English', pf.english_test + (pf.english_score ? ' — ' + pf.english_score : ''))}
-          ${kv('Work exp (yrs)', pf.work_exp)}${kv('Preferred country', pf.country)}${kv('Preferred program', pf.program)}
+          ${kv('Work exp (yrs)', pf.work_exp)}${kv('Preferred country', (countryOptions().find(c => c[0] === pf.country) || [pf.country, pf.country])[1])}${kv('Preferred program', pf.program)}
           ${kv('Budget USD/yr', pf.budget)}${kv('Extra info', pf.extra)}
         </table>` : '<p class="subtitle">No profile filled in yet.</p>'}</div>
       </div>
